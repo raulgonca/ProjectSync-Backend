@@ -5,6 +5,8 @@ namespace App\Entity;
 use App\Repository\RepoRepository;
 use Doctrine\DBAL\Types\Types;
 use Doctrine\ORM\Mapping as ORM;
+use Doctrine\Common\Collections\ArrayCollection;
+use Doctrine\Common\Collections\Collection;
 
 #[ORM\Entity(repositoryClass: RepoRepository::class)]
 class Repo
@@ -26,8 +28,8 @@ class Repo
     #[ORM\Column(type: Types::DATE_MUTABLE, nullable: true)]
     private ?\DateTimeInterface $fechaFin = null;
 
-    #[ORM\Column(type: Types::BLOB, nullable: true)]
-    private $file;
+    #[ORM\Column(length: 255, nullable: true)]
+    private ?string $file = null;
 
     #[ORM\ManyToOne(inversedBy: 'repos')]
     private ?User $owner = null;
@@ -35,8 +37,17 @@ class Repo
     #[ORM\Column(length: 255)]
     private ?string $fileName = null;
 
-    #[ORM\Column(length: 255, nullable: true)]
-    private ?string $client = null;
+    #[ORM\ManyToOne(targetEntity: Client::class)]
+    private ?Client $client = null;
+    
+    #[ORM\ManyToMany(targetEntity: User::class)]
+    #[ORM\JoinTable(name: 'repo_colaboradores')]
+    private Collection $colaboradores;
+    
+    public function __construct()
+    {
+        $this->colaboradores = new ArrayCollection();
+    }
 
     public function getId(): ?int
     {
@@ -91,12 +102,12 @@ class Repo
         return $this;
     }
 
-    public function getFile()
+    public function getFile(): ?string
     {
         return $this->file;
     }
 
-    public function setFile($file): static
+    public function setFile(?string $file): static
     {
         $this->file = $file;
 
@@ -127,14 +138,38 @@ class Repo
         return $this;
     }
 
-    public function getClient(): ?string
+    public function getClient(): ?Client
     {
         return $this->client;
     }
 
-    public function setClient(?string $client): static
+    public function setClient(?Client $client): static
     {
         $this->client = $client;
+
+        return $this;
+    }
+
+    /**
+     * @return Collection<int, User>
+     */
+    public function getColaboradores(): Collection
+    {
+        return $this->colaboradores;
+    }
+
+    public function addColaborador(User $colaborador): static
+    {
+        if (!$this->colaboradores->contains($colaborador)) {
+            $this->colaboradores->add($colaborador);
+        }
+
+        return $this;
+    }
+
+    public function removeColaborador(User $colaborador): static
+    {
+        $this->colaboradores->removeElement($colaborador);
 
         return $this;
     }

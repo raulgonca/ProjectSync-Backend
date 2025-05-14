@@ -4,12 +4,12 @@ namespace App\Controller;
 
 use Symfony\Bundle\FrameworkBundle\Controller\AbstractController;
 use Symfony\Component\HttpFoundation\JsonResponse;
-use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 
-final class MainController extends AbstractController
+class MainController extends AbstractController
 {
-    #[Route('/main', name: 'api_welcome', methods: ['GET'])]
+    #[Route('/api/main', name: 'api_main', methods: ['GET'])]
+    
     public function apiWelcome(): JsonResponse
     {
         $data = [

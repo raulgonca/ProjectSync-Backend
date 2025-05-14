@@ -10,28 +10,29 @@ use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
-use Symfony\Component\Serializer\SerializerInterface;
+use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 
+#[Route('/api', name: 'api_')]
 final class UserController extends AbstractController
 {
     private EntityManagerInterface $entityManager;
     private UserRepository $userRepository;
-    private SerializerInterface $serializer;
+    private UserPasswordHasherInterface $passwordHasher;
 
     public function __construct(
         EntityManagerInterface $entityManager,
         UserRepository $userRepository,
-        SerializerInterface $serializer
+        UserPasswordHasherInterface $passwordHasher
     ) {
         $this->entityManager = $entityManager;
         $this->userRepository = $userRepository;
-        $this->serializer = $serializer;
+        $this->passwordHasher = $passwordHasher;
     }
 
     /**
      * Obtiene todos los usuarios
      */
-    #[Route('/api/users', name: 'get_all_users', methods: ['GET'])]
+    #[Route('/users', name: 'get_all_users', methods: ['GET'])]
     public function getAllUsers(): JsonResponse
     {
         $users = $this->userRepository->findAll();
@@ -52,13 +53,13 @@ final class UserController extends AbstractController
             ];
         }
         
-        return new JsonResponse(['users' => $usersData], Response::HTTP_OK);
+        return new JsonResponse($usersData, Response::HTTP_OK);
     }
 
     /**
      * Obtiene un usuario por su ID
      */
-    #[Route('/api/users/{id}', name: 'get_user', methods: ['GET'])]
+    #[Route('/users/{id}', name: 'get_user', methods: ['GET'])]
     public function getUserId(int $id): JsonResponse
     {
         $user = $this->userRepository->find($id);
@@ -73,7 +74,6 @@ final class UserController extends AbstractController
             'email' => $user->getEmail(),
             'username' => $user->getUsername(),
             'cargo' => $user->getCargo()
-            // Puedes añadir más campos según sea necesario
         ];
         
         return new JsonResponse($userData, Response::HTTP_OK);
@@ -82,7 +82,7 @@ final class UserController extends AbstractController
     /**
      * Elimina un usuario
      */
-    #[Route('/api/users/{id}', name: 'delete_user', methods: ['DELETE'])]
+    #[Route('/deleteuser/{id}', name: 'delete_user', methods: ['DELETE'])]
     public function deleteUser(int $id): JsonResponse
     {
         $user = $this->userRepository->find($id);
@@ -109,7 +109,7 @@ final class UserController extends AbstractController
     /**
      * Actualiza la información de un usuario
      */
-    #[Route('/api/users/{id}', name: 'update_user', methods: ['PUT'])]
+    #[Route('/updateuser/{id}', name: 'update_user', methods: ['PUT'])]
     public function updateUser(Request $request, int $id): JsonResponse
     {
         $user = $this->userRepository->find($id);
@@ -124,23 +124,34 @@ final class UserController extends AbstractController
             $user->setEmail($data['email']);
         }
         
-        if (isset($data['name'])) {
-            $user->setName($data['name']);
+        if (isset($data['username'])) {
+            $user->setUsername($data['username']);
         }
         
-        // Actualiza otros campos según sea necesario
+        if (isset($data['cargo'])) {
+            $user->setCargo($data['cargo']);
+        }
         
         $this->entityManager->flush();
         
-        $updatedUser = $this->serializer->serialize($user, 'json', ['groups' => 'user:read']);
+        // Crear un array con los datos actualizados del usuario
+        $updatedUserData = [
+            'id' => $user->getId(),
+            'email' => $user->getEmail(),
+            'username' => $user->getUsername(),
+            'cargo' => $user->getCargo()
+        ];
         
-        return new JsonResponse($updatedUser, Response::HTTP_OK, [], true);
+        return new JsonResponse([
+            'message' => 'Usuario actualizado correctamente',
+            'user' => $updatedUserData
+        ], Response::HTTP_OK);
     }
 
     /**
      * Crea un nuevo usuario
      */
-    #[Route('/api/users', name: 'create_user', methods: ['POST'])]
+    #[Route('/createuser', name: 'create_user', methods: ['POST'])]
     public function createUser(Request $request): JsonResponse
     {
         $data = json_decode($request->getContent(), true);
@@ -171,17 +182,12 @@ final class UserController extends AbstractController
         $user->setEmail($data['email']);
         $user->setUsername($data['username']);
         
-        // Encriptar la contraseña antes de guardarla
-        $hashedPassword = password_hash($data['password'], PASSWORD_BCRYPT);
+        // Encriptar la contraseña
+        $hashedPassword = $this->passwordHasher->hashPassword($user, $data['password']);
         $user->setPassword($hashedPassword);
         
-        // Asignar un rol por defecto (por ejemplo, ROLE_USER)
-        $user->setCargo('ROLE_USER');
-        
-        // Configurar otros campos opcionales si están presentes
-        if (isset($data['name'])) {
-            $user->setUsername($data['name']); 
-        }
+        // Asignar un rol por defecto
+        $user->setCargo(isset($data['cargo']) ? $data['cargo'] : 'ROLE_USER');
         
         try {
             $this->entityManager->persist($user);
@@ -189,7 +195,7 @@ final class UserController extends AbstractController
             
             // Verificar que el usuario se haya guardado correctamente
             if ($user->getId()) {
-                // Crear un array con los datos del usuario manualmente
+                // Crear un array con los datos del usuario
                 $userData = [
                     'id' => $user->getId(),
                     'email' => $user->getEmail(),
@@ -197,13 +203,11 @@ final class UserController extends AbstractController
                     'cargo' => $user->getCargo()
                 ];
                 
-                // Crear respuesta con mensaje de éxito y datos del usuario
                 return new JsonResponse([
                     'message' => 'Usuario creado con éxito',
                     'user' => $userData
                 ], Response::HTTP_CREATED);
             } else {
-                // Si no se pudo obtener el ID, algo salió mal
                 return new JsonResponse(['message' => 'Error al crear el usuario: no se pudo obtener el ID'], Response::HTTP_INTERNAL_SERVER_ERROR);
             }
         } catch (\Exception $e) {
