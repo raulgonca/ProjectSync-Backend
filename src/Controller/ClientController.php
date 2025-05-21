@@ -10,6 +10,7 @@ use Symfony\Component\HttpFoundation\Request;
 use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\HttpFoundation\JsonResponse;
 use Symfony\Component\Routing\Attribute\Route;
+use Symfony\Component\Security\Http\Attribute\IsGranted;
 
 #[Route('/api', name: 'api_')]
 final class ClientController extends AbstractController
@@ -63,6 +64,7 @@ final class ClientController extends AbstractController
     }
 
     #[Route('/createclient', name: 'create_client', methods: ['POST'])]
+    #[IsGranted('IS_AUTHENTICATED_FULLY')]
     public function createClient(Request $request): JsonResponse
     {
         $data = json_decode($request->getContent(), true);
@@ -97,6 +99,7 @@ final class ClientController extends AbstractController
     }
 
     #[Route('/updateclient/{id}', name: 'update_client', methods: ['PUT'])]
+    #[IsGranted('IS_AUTHENTICATED_FULLY')]
     public function updateClient(Request $request, int $id): JsonResponse
     {
         $client = $this->clientRepository->find($id);
@@ -133,6 +136,7 @@ final class ClientController extends AbstractController
     }
 
     #[Route('/deleteclient/{id}', name: 'delete_client', methods: ['DELETE'])]
+    #[IsGranted('IS_AUTHENTICATED_FULLY')]
     public function deleteClient(int $id): JsonResponse
     {
         $client = $this->clientRepository->find($id);

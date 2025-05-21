@@ -12,7 +12,7 @@ use Symfony\Component\HttpFoundation\Response;
 use Symfony\Component\Routing\Attribute\Route;
 use Symfony\Component\PasswordHasher\Hasher\UserPasswordHasherInterface;
 
-#[Route('/api', name: 'api_')]
+#[Route('/api', name: 'api_users_')]
 final class UserController extends AbstractController
 {
     private EntityManagerInterface $entityManager;
@@ -30,19 +30,18 @@ final class UserController extends AbstractController
     }
 
     /**
-     * Obtiene todos los usuarios
+     * Obtiene todos los usuarios (con paginación opcional)
      */
-    #[Route('/users', name: 'get_all_users', methods: ['GET'])]
-    public function getAllUsers(): JsonResponse
+    #[Route('/users', name: 'get_all', methods: ['GET'])]
+    public function getAllUsers(Request $request): JsonResponse
     {
-        $users = $this->userRepository->findAll();
-        
-        // Si no hay usuarios, devolver un mensaje informativo
-        if (empty($users)) {
-            return new JsonResponse(['message' => 'No hay usuarios registrados'], Response::HTTP_OK);
-        }
-        
-        // Crear manualmente un array de usuarios
+        $page = max(1, (int)$request->query->get('page', 1));
+        $limit = max(1, min(100, (int)$request->query->get('limit', 50)));
+        $offset = ($page - 1) * $limit;
+
+        $users = $this->userRepository->findBy([], null, $limit, $offset);
+        $total = $this->userRepository->count([]);
+
         $usersData = [];
         foreach ($users as $user) {
             $usersData[] = [
@@ -52,164 +51,163 @@ final class UserController extends AbstractController
                 'cargo' => $user->getCargo()
             ];
         }
-        
-        return new JsonResponse($usersData, Response::HTTP_OK);
+
+        return new JsonResponse([
+            'data' => $usersData,
+            'pagination' => [
+                'page' => $page,
+                'limit' => $limit,
+                'total' => $total
+            ]
+        ], Response::HTTP_OK);
     }
 
     /**
      * Obtiene un usuario por su ID
      */
-    #[Route('/users/{id}', name: 'get_user', methods: ['GET'])]
+    #[Route('/users/{id}', name: 'get', methods: ['GET'])]
     public function getUserId(int $id): JsonResponse
     {
         $user = $this->userRepository->find($id);
-        
+
         if (!$user) {
             return new JsonResponse(['message' => 'Usuario no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Crear directamente un objeto con los datos del usuario
-        $userData = [
-            'id' => $user->getId(),
-            'email' => $user->getEmail(),
-            'username' => $user->getUsername(),
-            'cargo' => $user->getCargo()
-        ];
-        
-        return new JsonResponse($userData, Response::HTTP_OK);
+
+        return new JsonResponse([
+            'data' => [
+                'id' => $user->getId(),
+                'email' => $user->getEmail(),
+                'username' => $user->getUsername(),
+                'cargo' => $user->getCargo()
+            ]
+        ], Response::HTTP_OK);
     }
 
     /**
      * Elimina un usuario
      */
-    #[Route('/deleteuser/{id}', name: 'delete_user', methods: ['DELETE'])]
+    #[Route('/deleteusers/{id}', name: 'delete', methods: ['DELETE'])]
     public function deleteUser(int $id): JsonResponse
     {
         $user = $this->userRepository->find($id);
-        
+
         if (!$user) {
             return new JsonResponse(['message' => 'Usuario no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Guardar los datos del usuario antes de eliminarlo
+
         $userData = [
             'email' => $user->getEmail(),
             'username' => $user->getUsername()
         ];
-        
+
         $this->entityManager->remove($user);
         $this->entityManager->flush();
-        
+
         return new JsonResponse([
             'message' => 'Usuario eliminado correctamente',
-            'usuario_eliminado' => $userData
+            'data' => $userData
         ], Response::HTTP_OK);
     }
 
     /**
      * Actualiza la información de un usuario
      */
-    #[Route('/updateuser/{id}', name: 'update_user', methods: ['PUT'])]
+    #[Route('/updateusers/{id}', name: 'update', methods: ['PUT'])]
     public function updateUser(Request $request, int $id): JsonResponse
     {
         $user = $this->userRepository->find($id);
-        
+
         if (!$user) {
             return new JsonResponse(['message' => 'Usuario no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
+
         $data = json_decode($request->getContent(), true);
-        
+
         if (isset($data['email'])) {
+            if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
+                return new JsonResponse(['message' => 'El formato del email no es válido'], Response::HTTP_BAD_REQUEST);
+            }
+            $existingUserEmail = $this->userRepository->findOneBy(['email' => $data['email']]);
+            if ($existingUserEmail && $existingUserEmail->getId() !== $user->getId()) {
+                return new JsonResponse(['message' => 'El email ya está en uso'], Response::HTTP_CONFLICT);
+            }
             $user->setEmail($data['email']);
         }
-        
+
         if (isset($data['username'])) {
+            $existingUsername = $this->userRepository->findOneBy(['username' => $data['username']]);
+            if ($existingUsername && $existingUsername->getId() !== $user->getId()) {
+                return new JsonResponse(['message' => 'El nombre de usuario ya está en uso'], Response::HTTP_CONFLICT);
+            }
             $user->setUsername($data['username']);
         }
-        
+
         if (isset($data['cargo'])) {
             $user->setCargo($data['cargo']);
         }
-        
+
         $this->entityManager->flush();
-        
-        // Crear un array con los datos actualizados del usuario
-        $updatedUserData = [
-            'id' => $user->getId(),
-            'email' => $user->getEmail(),
-            'username' => $user->getUsername(),
-            'cargo' => $user->getCargo()
-        ];
-        
+
         return new JsonResponse([
             'message' => 'Usuario actualizado correctamente',
-            'user' => $updatedUserData
+            'data' => [
+                'id' => $user->getId(),
+                'email' => $user->getEmail(),
+                'username' => $user->getUsername(),
+                'cargo' => $user->getCargo()
+            ]
         ], Response::HTTP_OK);
     }
 
     /**
      * Crea un nuevo usuario
      */
-    #[Route('/createuser', name: 'create_user', methods: ['POST'])]
+    #[Route('/newusers', name: 'create', methods: ['POST'])]
     public function createUser(Request $request): JsonResponse
     {
         $data = json_decode($request->getContent(), true);
-        
-        // Validar que los campos requeridos estén presentes
+
         if (!isset($data['email']) || !isset($data['username']) || !isset($data['password'])) {
             return new JsonResponse(['message' => 'Faltan campos obligatorios (email, username, password)'], Response::HTTP_BAD_REQUEST);
         }
-        
-        // Validar formato de email
+
         if (!filter_var($data['email'], FILTER_VALIDATE_EMAIL)) {
             return new JsonResponse(['message' => 'El formato del email no es válido'], Response::HTTP_BAD_REQUEST);
         }
-        
-        // Verificar si el email ya existe
+
         $existingUserEmail = $this->userRepository->findOneBy(['email' => $data['email']]);
         if ($existingUserEmail) {
             return new JsonResponse(['message' => 'El email ya está en uso'], Response::HTTP_CONFLICT);
         }
-        
-        // Verificar si el username ya existe
+
         $existingUsername = $this->userRepository->findOneBy(['username' => $data['username']]);
         if ($existingUsername) {
             return new JsonResponse(['message' => 'El nombre de usuario ya está en uso'], Response::HTTP_CONFLICT);
         }
-        
+
         $user = new User();
         $user->setEmail($data['email']);
         $user->setUsername($data['username']);
-        
-        // Encriptar la contraseña
+
         $hashedPassword = $this->passwordHasher->hashPassword($user, $data['password']);
         $user->setPassword($hashedPassword);
-        
-        // Asignar un rol por defecto
+
         $user->setCargo(isset($data['cargo']) ? $data['cargo'] : 'ROLE_USER');
-        
+
         try {
             $this->entityManager->persist($user);
             $this->entityManager->flush();
-            
-            // Verificar que el usuario se haya guardado correctamente
-            if ($user->getId()) {
-                // Crear un array con los datos del usuario
-                $userData = [
+
+            return new JsonResponse([
+                'message' => 'Usuario creado con éxito',
+                'data' => [
                     'id' => $user->getId(),
                     'email' => $user->getEmail(),
                     'username' => $user->getUsername(),
                     'cargo' => $user->getCargo()
-                ];
-                
-                return new JsonResponse([
-                    'message' => 'Usuario creado con éxito',
-                    'user' => $userData
-                ], Response::HTTP_CREATED);
-            } else {
-                return new JsonResponse(['message' => 'Error al crear el usuario: no se pudo obtener el ID'], Response::HTTP_INTERNAL_SERVER_ERROR);
-            }
+                ]
+            ], Response::HTTP_CREATED);
         } catch (\Exception $e) {
             return new JsonResponse(['message' => 'Error al crear el usuario: ' . $e->getMessage()], Response::HTTP_INTERNAL_SERVER_ERROR);
         }

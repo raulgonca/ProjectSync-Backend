@@ -53,95 +53,150 @@ final class RepoController extends AbstractController
     #[Route('/newrepo', name: 'create_repo', methods: ['POST'])]
     public function createRepo(Request $request): JsonResponse
     {
-        $data = json_decode($request->getContent(), true);
-        
-        if (!isset($data['projectname']) || !isset($data['fechaInicio'])) {
+        // Si el request es multipart/form-data, usa $request->files y $request->request
+        $projectname = $request->request->get('projectname');
+        $fechaInicio = $request->request->get('fechaInicio');
+        $description = $request->request->get('description');
+        $fechaFin = $request->request->get('fechaFin');
+        $client = $request->request->get('client');
+        $fileName = $request->request->get('fileName');
+        $ownerId = $request->request->get('owner');
+
+        if (!$projectname || !$fechaInicio) {
             return new JsonResponse(['error' => 'Faltan datos obligatorios'], Response::HTTP_BAD_REQUEST);
         }
-        
+
         $repo = new Repo();
-        $repo->setProjectname($data['projectname']);
-        $repo->setDescription($data['description'] ?? null);
-        $repo->setFechaInicio(new \DateTime($data['fechaInicio']));
-        
-        if (isset($data['fechaFin'])) {
-            $repo->setFechaFin(new \DateTime($data['fechaFin']));
+        $repo->setProjectname($projectname);
+        $repo->setDescription($description ?? null);
+        $repo->setFechaInicio(new \DateTime($fechaInicio));
+
+        if ($fechaFin) {
+            $repo->setFechaFin(new \DateTime($fechaFin));
         }
-        
-        if (isset($data['file'])) {
-            $repo->setFile($data['file']);
+
+        // Manejo del archivo
+        $uploadedFile = $request->files->get('file');
+        if ($uploadedFile) {
+            $originalName = $uploadedFile->getClientOriginalName();
+            $safeName = uniqid().'-'.$originalName;
+            $uploadDir = $this->getParameter('kernel.project_dir') . '/public/FileRepos';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+            $uploadedFile->move($uploadDir, $safeName);
+            $repo->setFileName($safeName);
         }
-        
-        if (isset($data['fileName'])) {
-            $repo->setFileName($data['fileName']);
+
+        if ($client) {
+            // Buscar el objeto Client si es un ID
+            if (is_numeric($client)) {
+                $clientObj = $this->entityManager->getRepository(\App\Entity\Client::class)->find($client);
+                if (!$clientObj) {
+                    return new JsonResponse(['error' => 'Cliente no encontrado'], Response::HTTP_BAD_REQUEST);
+                }
+                $repo->setClient($clientObj);
+            } else {
+                $repo->setClient($client);
+            }
+        }
+
+        // Establecer el propietario como el usuario actual o el que llega por parámetro
+        if ($ownerId) {
+            $owner = $this->entityManager->getRepository(User::class)->find($ownerId);
+            if (!$owner) {
+                return new JsonResponse(['error' => 'Usuario owner no encontrado'], Response::HTTP_BAD_REQUEST);
+            }
+            $repo->setOwner($owner);
         } else {
-            $repo->setFileName($data['projectname']);
+            $user = $this->security->getUser();
+            if (!$user) {
+                return new JsonResponse(['error' => 'No hay usuario autenticado'], Response::HTTP_UNAUTHORIZED);
+            }
+            $repo->setOwner($user);
         }
-        
-        if (isset($data['client'])) {
-            $repo->setClient($data['client']);
-        }
-        
-        // Establecer el propietario como el usuario actual
-        $user = $this->security->getUser();
-        $repo->setOwner($user);
-        
+
         $this->entityManager->persist($repo);
         $this->entityManager->flush();
-        
+
         return new JsonResponse([
             'id' => $repo->getId(),
             'message' => 'Repositorio creado con éxito'
         ], Response::HTTP_CREATED);
     }
 
-    #[Route('/updaterepo/{id}', name: 'update_repo', methods: ['PUT'])]
+    #[Route('/updaterepo/{id}', name: 'update_repo', methods: ['PATCH'])]
     public function updateRepo(Request $request, int $id): JsonResponse
     {
         $repo = $this->entityManager->getRepository(Repo::class)->find($id);
-        
+
         if (!$repo) {
             return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Verificar que el usuario actual es el propietario
+
         $user = $this->security->getUser();
-        if ($repo->getOwner() !== $user) {
-            return new JsonResponse(['error' => 'No tienes permiso para modificar este repositorio'], Response::HTTP_FORBIDDEN);
+        $owner = $repo->getOwner();
+        $isOwner = $user && $owner && $user->getId() === $owner->getId();
+        if (!$isOwner) {
+            return new JsonResponse([
+                'error' => 'No tienes permiso para modificar este repositorio',
+                'user_id' => $user ? $user->getId() : null,
+                'owner_id' => $owner ? $owner->getId() : null
+            ], Response::HTTP_FORBIDDEN);
         }
-        
-        $data = json_decode($request->getContent(), true);
-        
-        if (isset($data['projectname'])) {
+
+        // Permitir tanto JSON como FormData
+        $data = [];
+        $contentType = $request->headers->get('Content-Type');
+        if ($contentType && 0 === strpos($contentType, 'application/json')) {
+            $data = json_decode($request->getContent(), true);
+        } else {
+            $data = $request->request->all();
+        }
+
+        // Solo actualiza los campos que vienen en la petición
+        if (array_key_exists('projectname', $data)) {
             $repo->setProjectname($data['projectname']);
         }
-        
-        if (isset($data['description'])) {
+
+        if (array_key_exists('description', $data)) {
             $repo->setDescription($data['description']);
         }
-        
-        if (isset($data['fechaInicio'])) {
+
+        if (array_key_exists('fechaInicio', $data)) {
             $repo->setFechaInicio(new \DateTime($data['fechaInicio']));
         }
-        
-        if (isset($data['fechaFin'])) {
-            $repo->setFechaFin(new \DateTime($data['fechaFin']));
+
+        if (array_key_exists('fechaFin', $data)) {
+            $repo->setFechaFin($data['fechaFin'] ? new \DateTime($data['fechaFin']) : null);
         }
-        
-        if (isset($data['file'])) {
-            $repo->setFile($data['file']);
+
+        // Manejo de archivo si viene por FormData
+        $uploadedFile = $request->files->get('file');
+        if ($uploadedFile) {
+            $originalName = $uploadedFile->getClientOriginalName();
+            $safeName = uniqid().'-'.$originalName;
+            $uploadDir = $this->getParameter('kernel.project_dir') . '/public/FileRepos';
+            if (!is_dir($uploadDir)) {
+                mkdir($uploadDir, 0777, true);
+            }
+            $uploadedFile->move($uploadDir, $safeName);
+            $repo->setFileName($safeName);
         }
-        
-        if (isset($data['fileName'])) {
-            $repo->setFileName($data['fileName']);
+
+        if (array_key_exists('client', $data)) {
+            // Buscar el objeto Client si es un ID
+            $client = $data['client'];
+            if (is_numeric($client)) {
+                $clientObj = $this->entityManager->getRepository(\App\Entity\Client::class)->find($client);
+                $repo->setClient($clientObj);
+            } else {
+                $repo->setClient($client);
+            }
         }
-        
-        if (isset($data['client'])) {
-            $repo->setClient($data['client']);
-        }
-        
+
         $this->entityManager->flush();
-        
+
         return new JsonResponse(['message' => 'Repositorio actualizado con éxito']);
     }
 
@@ -149,17 +204,18 @@ final class RepoController extends AbstractController
     public function deleteRepo(int $id): JsonResponse
     {
         $repo = $this->entityManager->getRepository(Repo::class)->find($id);
-        
+
         if (!$repo) {
             return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Verificar que el usuario actual es el propietario
+
         $user = $this->security->getUser();
-        if ($repo->getOwner() !== $user) {
+        $owner = $repo->getOwner();
+        $isOwner = $user && $owner && $user->getId() === $owner->getId();
+        if (!$isOwner) {
             return new JsonResponse(['error' => 'No tienes permiso para eliminar este repositorio'], Response::HTTP_FORBIDDEN);
         }
-        
+
         $this->entityManager->remove($repo);
         $this->entityManager->flush();
         
@@ -170,17 +226,18 @@ final class RepoController extends AbstractController
     public function addColaborador(Request $request, int $id): JsonResponse
     {
         $repo = $this->entityManager->getRepository(Repo::class)->find($id);
-        
+
         if (!$repo) {
             return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Verificar que el usuario actual es el propietario
+
         $user = $this->security->getUser();
-        if ($repo->getOwner() !== $user) {
+        $owner = $repo->getOwner();
+        $isOwner = $user && $owner && $user->getId() === $owner->getId();
+        if (!$isOwner) {
             return new JsonResponse(['error' => 'No tienes permiso para añadir colaboradores a este repositorio'], Response::HTTP_FORBIDDEN);
         }
-        
+
         $data = json_decode($request->getContent(), true);
         
         if (!isset($data['userId'])) {
@@ -213,17 +270,18 @@ final class RepoController extends AbstractController
     public function removeColaborador(int $id, int $userId): JsonResponse
     {
         $repo = $this->entityManager->getRepository(Repo::class)->find($id);
-        
+
         if (!$repo) {
             return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Verificar que el usuario actual es el propietario
+
         $user = $this->security->getUser();
-        if ($repo->getOwner() !== $user) {
+        $owner = $repo->getOwner();
+        $isOwner = $user && $owner && $user->getId() === $owner->getId();
+        if (!$isOwner) {
             return new JsonResponse(['error' => 'No tienes permiso para eliminar colaboradores de este repositorio'], Response::HTTP_FORBIDDEN);
         }
-        
+
         $colaborador = $this->entityManager->getRepository(User::class)->find($userId);
         
         if (!$colaborador) {
@@ -240,62 +298,25 @@ final class RepoController extends AbstractController
         return new JsonResponse(['message' => 'Colaborador eliminado con éxito']);
     }
 
-    #[Route('/repo/{id}', name: 'get_repo', methods: ['GET'])]
-    public function getRepo(int $id): JsonResponse
-    {
-        $repo = $this->entityManager->getRepository(Repo::class)->find($id);
-        
-        if (!$repo) {
-            return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
-        }
-        
-        // Verificar que el usuario actual es el propietario o colaborador
-        $user = $this->security->getUser();
-        if ($repo->getOwner() !== $user && !$repo->getColaboradores()->contains($user)) {
-            return new JsonResponse(['error' => 'No tienes permiso para ver este repositorio'], Response::HTTP_FORBIDDEN);
-        }
-        
-        $client = $repo->getClient();
-        
-        return new JsonResponse([
-            'id' => $repo->getId(),
-            'projectname' => $repo->getProjectname(),
-            'description' => $repo->getDescription(),
-            'fechaInicio' => $repo->getFechaInicio()->format('Y-m-d'),
-            'fechaFin' => $repo->getFechaFin() ? $repo->getFechaFin()->format('Y-m-d') : null,
-            'fileName' => $repo->getFileName(),
-            'client' => $client ? [
-                'id' => $client->getId(),
-                'name' => $client->getName() 
-            ] : null,
-            'owner' => [
-                'id' => $repo->getOwner()->getId(),
-                'username' => $repo->getOwner()->getUsername()
-            ],
-            'colaboradores' => array_map(function($colaborador) {
-                return [
-                    'id' => $colaborador->getId(),
-                    'username' => $colaborador->getUsername()
-                ];
-            }, $repo->getColaboradores()->toArray())
-        ]);
-    }
-
     #[Route('/repos/{id}/colaboradores', name: 'get_colaboradores', methods: ['GET'])]
     public function getColaboradores(int $id): JsonResponse
     {
         $repo = $this->entityManager->getRepository(Repo::class)->find($id);
-        
+
         if (!$repo) {
             return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
         }
-        
-        // Verificar que el usuario actual es el propietario o colaborador
+
         $user = $this->security->getUser();
-        if ($repo->getOwner() !== $user && !$repo->getColaboradores()->contains($user)) {
+        $owner = $repo->getOwner();
+        $isOwner = $user && $owner && $user->getId() === $owner->getId();
+        $isColaborador = $repo->getColaboradores()->exists(function($key, $colab) use ($user) {
+            return $colab->getId() === $user->getId();
+        });
+        if (!$isOwner && !$isColaborador) {
             return new JsonResponse(['error' => 'No tienes permiso para ver los colaboradores de este repositorio'], Response::HTTP_FORBIDDEN);
         }
-        
+
         $colaboradores = [];
         foreach ($repo->getColaboradores() as $colaborador) {
             $colaboradores[] = [
@@ -345,4 +366,83 @@ final class RepoController extends AbstractController
         
         return new JsonResponse($reposData);
     }
+
+    #[Route('/repos/all', name: 'api_repos_all', methods: ['GET'])]
+    public function getAllRepos(): JsonResponse
+    {
+        $repos = $this->entityManager->getRepository(Repo::class)->findAll();
+
+        $reposData = [];
+        foreach ($repos as $repo) {
+            $client = $repo->getClient();
+            $reposData[] = [
+                'id' => $repo->getId(),
+                'projectname' => $repo->getProjectname(),
+                'description' => $repo->getDescription(),
+                'fechaInicio' => $repo->getFechaInicio() ? $repo->getFechaInicio()->format('Y-m-d') : null,
+                'fechaFin' => $repo->getFechaFin() ? $repo->getFechaFin()->format('Y-m-d') : null,
+                'fileName' => $repo->getFileName(),
+                'client' => $client ? [
+                    'id' => $client->getId(),
+                    'name' => $client->getName()
+                ] : null,
+            ];
+        }
+
+        return new JsonResponse($reposData);
+    }
+
+    #[Route('/repos/find/{id}', name: 'find_repo_by_id', methods: ['GET'])]
+    public function findRepoById(int $id): JsonResponse
+    {
+        $repo = $this->entityManager->getRepository(Repo::class)->find($id);
+
+        if (!$repo) {
+            return new JsonResponse(['error' => 'Repositorio no encontrado'], Response::HTTP_NOT_FOUND);
+        }
+
+        $client = $repo->getClient();
+        $owner = $repo->getOwner();
+
+        $repoData = [
+            'id' => $repo->getId(),
+            'projectname' => $repo->getProjectname(),
+            'description' => $repo->getDescription(),
+            'fechaInicio' => $repo->getFechaInicio()->format('Y-m-d'),
+            'fechaFin' => $repo->getFechaFin() ? $repo->getFechaFin()->format('Y-m-d') : null,
+            'fileName' => $repo->getFileName(),
+            'owner' => $owner ? [
+                'id' => $owner->getId(),
+                'username' => $owner->getUsername()
+            ] : null,
+            'client' => $client ? [
+                'id' => $client->getId(),
+                'name' => $client->getName()
+            ] : null,
+            'colaboradores' => array_map(function($colaborador) {
+                return [
+                    'id' => $colaborador->getId(),
+                    'username' => $colaborador->getUsername()
+                ];
+            }, $repo->getColaboradores()->toArray())
+        ];
+
+        return new JsonResponse($repoData);
+    }
+
+    #[Route('/repo/{id}/download', name: 'download_repo_file', methods: ['GET'])]
+    public function downloadRepoFile(int $id): Response
+    {
+        $repo = $this->entityManager->getRepository(Repo::class)->find($id);
+        if (!$repo || !$repo->getFileName()) {
+            throw $this->createNotFoundException('Archivo no encontrado');
+        }
+        $filePath = $this->getParameter('kernel.project_dir') . '/public/FileRepos/' . $repo->getFileName();
+        if (!file_exists($filePath)) {
+            throw $this->createNotFoundException('Archivo no encontrado');
+        }
+        return $this->file($filePath, $repo->getFileName());
+    }
+
+
 }
